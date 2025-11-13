@@ -27,6 +27,7 @@ type Player struct {
 	h, w          float64
 	BoatFramesCNT int
 	lifes         int
+	GameOverFCNT  int
 
 	color color.Color
 }
@@ -38,9 +39,10 @@ type Item struct {
 }
 
 type Enemy struct {
-	x, y  float64
-	HP    int
-	Speed float64
+	x, y            float64
+	HP              int
+	Speed           float64
+	HitcooldownFCNT int
 }
 
 type Tile struct {
@@ -130,7 +132,7 @@ func (p *Player) Draw(screen *ebiten.Image) {
 }
 
 func (e *Enemy) Draw(screen *ebiten.Image, xMap float64, yMap float64) {
-	ebitenutil.DrawRect(screen, e.x-xMap, e.y-yMap, 50, 50, color.RGBA{R: 255, G: 50, B: 50, A: 255})
+	ebitenutil.DrawRect(screen, e.x+xMap, e.y+yMap, 50, 50, color.RGBA{R: 255, G: 50, B: 50, A: 255})
 }
 func NewGame() *Game {
 	g := &Game{
@@ -139,15 +141,16 @@ func NewGame() *Game {
 			y:     425,
 			h:     50,
 			w:     50,
+			lifes: 5,
 			color: color.RGBA{34, 139, 34, 255},
 			Speed: 7,
 		},
 		Enemies: []*Enemy{
-			{x: 1300, y: 800, Speed: 4, HP: 1},
-			{x: 1400, y: 900, Speed: 5, HP: 1},
-			{x: 1500, y: 1000, Speed: 3, HP: 1},
-			{x: 1600, y: 1100, Speed: 4, HP: 1},
-			{x: 1700, y: 1200, Speed: 6, HP: 1},
+			{x: 450, y: 150, Speed: 1, HP: 1},
+			{x: 450, y: 900, Speed: 2, HP: 1},
+			{x: 600, y: 1500, Speed: 3, HP: 1},
+			{x: 750, y: 2100, Speed: 4, HP: 1},
+			{x: 300, y: 2250, Speed: 5, HP: 1},
 		},
 		TimeOfDay:     0.0,
 		DayDuration:   60,
@@ -256,26 +259,29 @@ func (g *Game) currentTile(xMap, yMap float64) []Tile {
 	}
 	return ret
 } // <-- Ajoute cette accolade fermante ici
-
-func (g *Game) currentTileE(xMap, yMap float64) []Tile {
+func RectRectCollision(x1, y1, w1, h1 float64, x2, y2, w2, h2 float64) bool {
+	return x1 < x2+w2 &&
+		x1+w1 > x2 &&
+		y1 < y2+h2 &&
+		y1+h1 > y2
+}
+func (g *Game) currentTileE(newX, newY float64) []Tile {
 	ret := make([]Tile, 0)
-	if g.currentScreen == "world 1" {
-		for _, e := range g.Enemies {
-			for _, row := range g.MapTiles {
-				for _, t := range row {
-					if e.Touch(t, xMap, yMap) {
-						ret = append(ret, t)
-					}
-				}
-			}
-		}
-	} else if g.currentScreen == "world 2" {
-		for _, e := range g.Enemies {
-			for _, row := range g.MapTiles2 {
-				for _, t := range row {
-					if e.Touch(t, xMap, yMap) {
-						ret = append(ret, t)
-					}
+	tiles := g.MapTiles
+	if g.currentScreen == "world 2" {
+		tiles = g.MapTiles2
+	}
+
+	// newX et newY sont les nouvelles coordonnées monde de l'ennemi
+	for _, row := range tiles {
+		for _, t := range row {
+			// Vérifier collision entre la nouvelle position de l'ennemi et la tuile
+			if newX < t.x+tilesize &&
+				newX+50 > t.x &&
+				newY < t.y+tilesize &&
+				newY+50 > t.y {
+				if t.Solid {
+					ret = append(ret, t)
 				}
 			}
 		}
@@ -284,14 +290,17 @@ func (g *Game) currentTileE(xMap, yMap float64) []Tile {
 }
 
 func (g *Game) PlayerX() float64 {
-	return g.Player.x + g.XMap
+	return g.Player.x - g.XMap
 }
 
 func (g *Game) PlayerY() float64 {
-	return g.Player.y + g.YMap
+	return g.Player.y - g.YMap
 }
 
 func (g *Game) Update() error {
+	if g.Player.GameOverFCNT > 0 {
+		g.Player.GameOverFCNT--
+	}
 	if g.currentScreen == "Menu" {
 		if ebiten.IsKeyPressed(ebiten.Key1) {
 			g.currentScreen = "world 1"
@@ -307,9 +316,12 @@ func (g *Game) Update() error {
 		g.TimeOfDay = 0.0 // boucle infinie
 	}
 	if g.currentScreen != "Menu" {
-		var ex float64
-		var ey float64
+		if g.Player.lifes <= 0 {
+			g.Player.GameOverFCNT = 120
+			g.currentScreen = "Menu"
+		}
 		for _, e := range g.Enemies {
+			ex, ey := 0.0, 0.0
 			playerX := g.PlayerX()
 			playerY := g.PlayerY()
 
@@ -325,9 +337,16 @@ func (g *Game) Update() error {
 			if e.y < playerY {
 				ey += e.Speed
 			}
+			if e.HitcooldownFCNT > 0 {
+				e.HitcooldownFCNT--
+			}
+			if RectRectCollision(e.x, e.y, 50, 50, playerX, playerY, 50, 50) && e.HitcooldownFCNT <= 0 {
+				g.Player.lifes--
+				e.HitcooldownFCNT = 60
+			}
 			if ey != 0 || ex != 0 {
 				canMove := true // Flag pour savoir si on peut bouger
-				for _, t := range g.currentTile(e.x+ex, e.y+ey) {
+				for _, t := range g.currentTileE(e.x+ex, e.y+ey) {
 					if t.Solid {
 						canMove = false
 						break
@@ -339,6 +358,7 @@ func (g *Game) Update() error {
 					e.x += ex
 					e.y += ey
 				}
+				fmt.Println("Enemy moving:", e.x, e.y, "canMove:", canMove)
 			}
 		}
 
@@ -445,6 +465,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 				tile.Draw(screen, g.XMap, g.YMap)
 			}
 		}
+		for _, e := range g.Enemies {
+			e.Draw(screen, g.XMap, g.YMap)
+		}
 		g.Player.Draw(screen)
 		var darkness float64
 		if g.TimeOfDay <= 0.5 {
@@ -482,6 +505,17 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}, op2)
 
 	}
+	if g.Player.GameOverFCNT > 0 {
+		// Affichage du titre du gagnant
+		op := &text.DrawOptions{}
+		op.GeoM.Translate(float64(80), float64(300))
+		op.ColorScale.ScaleWithColor(color.RGBA{222, 49, 99, 0})
+		text.Draw(screen, "Game Over", &text.GoTextFace{
+			Source: mplusFaceSource,
+			Size:   150,
+		}, op)
+	}
+	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Lives: %d", g.Player.lifes), 10, 10)
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
